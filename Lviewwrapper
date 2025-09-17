@@ -1,0 +1,607 @@
+# Cargo.toml - DLL project
+
+[package]
+name = “database-labview-dll”
+version = “0.1.0”
+edition = “2021”
+
+[lib]
+crate-type = [“cdylib”]  # This creates a DLL
+
+[dependencies]
+tokio = { version = “1”, features = [“full”] }
+tonic = “0.14”
+prost = “0.14”
+anyhow = “1”
+once_cell = “1.19”
+libc = “0.2”
+
+[build-dependencies]
+tonic-prost-build = “0.14”
+
+-----
+
+# build.rs - Same as your server
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+tonic_prost_build::compile_protos(“proto/database.proto”)?;
+println!(“cargo:rerun-if-changed=proto/database.proto”);
+Ok(())
+}
+
+-----
+
+# src/lib.rs - DLL wrapper for LabVIEW
+
+use std::ffi::{CStr, CString};
+use std::os::raw::c_char;
+use std::sync::Mutex;
+use once_cell::sync::OnceCell;
+use tokio::runtime::Runtime;
+
+// Include the generated proto code
+pub mod database {
+tonic::include_proto!(“database”);
+}
+
+use database::{
+database_service_client::DatabaseServiceClient,
+*,
+};
+
+// Global runtime and client
+static RUNTIME: OnceCell<Runtime> = OnceCell::new();
+static CLIENT: OnceCell<Mutex<Option<DatabaseServiceClient<tonic::transport::Channel>>>> = OnceCell::new();
+
+// Error codes for LabVIEW
+const SUCCESS: i32 = 0;
+const ERROR_NOT_CONNECTED: i32 = -1;
+const ERROR_INVALID_PARAMS: i32 = -2;
+const ERROR_GRPC_ERROR: i32 = -3;
+const ERROR_MEMORY: i32 = -4;
+
+/// Connect to the gRPC server
+/// Returns 0 on success, negative on error
+#[no_mangle]
+pub extern “C” fn connect_to_server(host: *const c_char, port: i32) -> i32 {
+if host.is_null() {
+return ERROR_INVALID_PARAMS;
+}
+
+```
+let host_str = match unsafe { CStr::from_ptr(host) }.to_str() {
+    Ok(s) => s,
+    Err(_) => return ERROR_INVALID_PARAMS,
+};
+
+let address = format!("http://{}:{}", host_str, port);
+
+// Initialize runtime
+let rt = match RUNTIME.get_or_try_init(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+}) {
+    Ok(rt) => rt,
+    Err(_) => return ERROR_GRPC_ERROR,
+};
+
+// Connect to server
+let result = rt.block_on(async {
+    DatabaseServiceClient::connect(address).await
+});
+
+match result {
+    Ok(client) => {
+        CLIENT.get_or_init(|| Mutex::new(None));
+        if let Some(client_mutex) = CLIENT.get() {
+            *client_mutex.lock().unwrap() = Some(client);
+            SUCCESS
+        } else {
+            ERROR_GRPC_ERROR
+        }
+    }
+    Err(_) => ERROR_GRPC_ERROR,
+}
+```
+
+}
+
+/// Write a value to the database
+/// Returns 0 on success, negative on error
+#[no_mangle]
+pub extern “C” fn write_value(
+table_name: *const c_char,
+id_column: *const c_char,
+id_value: *const c_char,
+column_name: *const c_char,
+column_value: *const c_char,
+create_if_missing: i32,
+) -> i32 {
+// Check parameters
+if table_name.is_null() || id_column.is_null() || id_value.is_null()
+|| column_name.is_null() || column_value.is_null() {
+return ERROR_INVALID_PARAMS;
+}
+
+```
+// Convert C strings to Rust strings
+let table_str = match unsafe { CStr::from_ptr(table_name) }.to_str() {
+    Ok(s) => s,
+    Err(_) => return ERROR_INVALID_PARAMS,
+};
+let id_column_str = match unsafe { CStr::from_ptr(id_column) }.to_str() {
+    Ok(s) => s,
+    Err(_) => return ERROR_INVALID_PARAMS,
+};
+let id_value_str = match unsafe { CStr::from_ptr(id_value) }.to_str() {
+    Ok(s) => s,
+    Err(_) => return ERROR_INVALID_PARAMS,
+};
+let column_name_str = match unsafe { CStr::from_ptr(column_name) }.to_str() {
+    Ok(s) => s,
+    Err(_) => return ERROR_INVALID_PARAMS,
+};
+let column_value_str = match unsafe { CStr::from_ptr(column_value) }.to_str() {
+    Ok(s) => s,
+    Err(_) => return ERROR_INVALID_PARAMS,
+};
+
+// Get client
+let client_mutex = match CLIENT.get() {
+    Some(c) => c,
+    None => return ERROR_NOT_CONNECTED,
+};
+
+let mut client_guard = client_mutex.lock().unwrap();
+let client = match client_guard.as_mut() {
+    Some(c) => c,
+    None => return ERROR_NOT_CONNECTED,
+};
+
+// Get runtime
+let rt = match RUNTIME.get() {
+    Some(rt) => rt,
+    None => return ERROR_NOT_CONNECTED,
+};
+
+// Create the request
+let request = WriteValueRequest {
+    table_name: table_str.to_string(),
+    id_column: id_column_str.to_string(),
+    id_value: Some(Value {
+        value_type: Some(database::value::ValueType::TextValue(id_value_str.to_string())),
+    }),
+    column_name: column_name_str.to_string(),
+    column_value: Some(Value {
+        value_type: Some(database::value::ValueType::TextValue(column_value_str.to_string())),
+    }),
+    create_if_missing: create_if_missing != 0,
+};
+
+// Make the call
+let result = rt.block_on(async {
+    client.write_value(request).await
+});
+
+match result {
+    Ok(response) => {
+        if response.into_inner().success {
+            SUCCESS
+        } else {
+            ERROR_GRPC_ERROR
+        }
+    }
+    Err(_) => ERROR_GRPC_ERROR,
+}
+```
+
+}
+
+/// Read a value from the database
+/// Returns 0 on success, negative on error
+/// The value is copied to the provided buffer (max_len bytes)
+#[no_mangle]
+pub extern “C” fn read_value(
+table_name: *const c_char,
+id_column: *const c_char,
+id_value: *const c_char,
+column_name: *const c_char,
+output_buffer: *mut c_char,
+max_len: i32,
+) -> i32 {
+// Check parameters
+if table_name.is_null() || id_column.is_null() || id_value.is_null()
+|| column_name.is_null() || output_buffer.is_null() || max_len <= 0 {
+return ERROR_INVALID_PARAMS;
+}
+
+```
+// Convert C strings to Rust strings
+let table_str = match unsafe { CStr::from_ptr(table_name) }.to_str() {
+    Ok(s) => s,
+    Err(_) => return ERROR_INVALID_PARAMS,
+};
+let id_column_str = match unsafe { CStr::from_ptr(id_column) }.to_str() {
+    Ok(s) => s,
+    Err(_) => return ERROR_INVALID_PARAMS,
+};
+let id_value_str = match unsafe { CStr::from_ptr(id_value) }.to_str() {
+    Ok(s) => s,
+    Err(_) => return ERROR_INVALID_PARAMS,
+};
+let column_name_str = match unsafe { CStr::from_ptr(column_name) }.to_str() {
+    Ok(s) => s,
+    Err(_) => return ERROR_INVALID_PARAMS,
+};
+
+// Get client
+let client_mutex = match CLIENT.get() {
+    Some(c) => c,
+    None => return ERROR_NOT_CONNECTED,
+};
+
+let mut client_guard = client_mutex.lock().unwrap();
+let client = match client_guard.as_mut() {
+    Some(c) => c,
+    None => return ERROR_NOT_CONNECTED,
+};
+
+// Get runtime
+let rt = match RUNTIME.get() {
+    Some(rt) => rt,
+    None => return ERROR_NOT_CONNECTED,
+};
+
+// Create the request
+let request = ReadValueRequest {
+    table_name: table_str.to_string(),
+    id_column: id_column_str.to_string(),
+    id_value: Some(Value {
+        value_type: Some(database::value::ValueType::TextValue(id_value_str.to_string())),
+    }),
+    column_name: column_name_str.to_string(),
+};
+
+// Make the call
+let result = rt.block_on(async {
+    client.read_value(request).await
+});
+
+match result {
+    Ok(response) => {
+        let inner = response.into_inner();
+        if inner.found {
+            if let Some(value) = inner.value {
+                if let Some(database::value::ValueType::TextValue(text)) = value.value_type {
+                    // Copy to output buffer
+                    let c_string = match CString::new(text) {
+                        Ok(s) => s,
+                        Err(_) => return ERROR_MEMORY,
+                    };
+                    
+                    let bytes = c_string.as_bytes_with_nul();
+                    let copy_len = std::cmp::min(bytes.len(), max_len as usize);
+                    
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            bytes.as_ptr(),
+                            output_buffer as *mut u8,
+                            copy_len,
+                        );
+                    }
+                    
+                    SUCCESS
+                } else {
+                    ERROR_GRPC_ERROR
+                }
+            } else {
+                // Value not found - return empty string
+                unsafe {
+                    *output_buffer = 0;
+                }
+                SUCCESS
+            }
+        } else {
+            // Not found - return empty string
+            unsafe {
+                *output_buffer = 0;
+            }
+            SUCCESS
+        }
+    }
+    Err(_) => ERROR_GRPC_ERROR,
+}
+```
+
+}
+
+/// Create a table
+/// Returns 0 on success, negative on error
+#[no_mangle]
+pub extern “C” fn create_table(
+table_name: *const c_char,
+id_column_name: *const c_char,
+) -> i32 {
+if table_name.is_null() || id_column_name.is_null() {
+return ERROR_INVALID_PARAMS;
+}
+
+```
+let table_str = match unsafe { CStr::from_ptr(table_name) }.to_str() {
+    Ok(s) => s,
+    Err(_) => return ERROR_INVALID_PARAMS,
+};
+let id_column_str = match unsafe { CStr::from_ptr(id_column_name) }.to_str() {
+    Ok(s) => s,
+    Err(_) => return ERROR_INVALID_PARAMS,
+};
+
+// Get client and runtime
+let client_mutex = match CLIENT.get() {
+    Some(c) => c,
+    None => return ERROR_NOT_CONNECTED,
+};
+
+let mut client_guard = client_mutex.lock().unwrap();
+let client = match client_guard.as_mut() {
+    Some(c) => c,
+    None => return ERROR_NOT_CONNECTED,
+};
+
+let rt = match RUNTIME.get() {
+    Some(rt) => rt,
+    None => return ERROR_NOT_CONNECTED,
+};
+
+// Create basic table with ID column
+let request = CreateTableRequest {
+    table_name: table_str.to_string(),
+    columns: vec![
+        ColumnSpec {
+            name: id_column_str.to_string(),
+            data_type: "TEXT".to_string(),
+            not_null: true,
+            primary_key: true,
+            unique: false,
+            default_value: String::new(),
+        }
+    ],
+    if_not_exists: true,
+};
+
+let result = rt.block_on(async {
+    client.create_table(request).await
+});
+
+match result {
+    Ok(response) => {
+        if response.into_inner().success {
+            SUCCESS
+        } else {
+            ERROR_GRPC_ERROR
+        }
+    }
+    Err(_) => ERROR_GRPC_ERROR,
+}
+```
+
+}
+
+/// Disconnect from the server
+#[no_mangle]
+pub extern “C” fn disconnect() -> i32 {
+if let Some(client_mutex) = CLIENT.get() {
+*client_mutex.lock().unwrap() = None;
+}
+SUCCESS
+}
+
+-----
+
+# labview_interface.h - Header file for LabVIEW
+
+// C header file for LabVIEW DLL interface
+
+#ifndef LABVIEW_DATABASE_H
+#define LABVIEW_DATABASE_H
+
+#ifdef __cplusplus
+extern “C” {
+#endif
+
+// Error codes
+#define DB_SUCCESS 0
+#define DB_ERROR_NOT_CONNECTED -1
+#define DB_ERROR_INVALID_PARAMS -2
+#define DB_ERROR_GRPC_ERROR -3
+#define DB_ERROR_MEMORY -4
+
+// Connect to gRPC server
+// Returns 0 on success, negative on error
+int connect_to_server(const char* host, int port);
+
+// Write a value to the database
+// create_if_missing: 1 to create row if it doesn’t exist, 0 otherwise
+// Returns 0 on success, negative on error
+int write_value(
+const char* table_name,
+const char* id_column,
+const char* id_value,
+const char* column_name,
+const char* column_value,
+int create_if_missing
+);
+
+// Read a value from the database
+// output_buffer: buffer to store the result (null-terminated string)
+// max_len: maximum length of output_buffer
+// Returns 0 on success, negative on error
+int read_value(
+const char* table_name,
+const char* id_column,
+const char* id_value,
+const char* column_name,
+char* output_buffer,
+int max_len
+);
+
+// Create a table with an ID column
+// Returns 0 on success, negative on error
+int create_table(const char* table_name, const char* id_column_name);
+
+// Disconnect from server
+// Returns 0 on success
+int disconnect(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // LABVIEW_DATABASE_H
+
+-----
+
+# build_dll.bat - Build script for Windows
+
+@echo off
+echo Building LabVIEW DLL…
+
+cargo build –release
+
+if %ERRORLEVEL% == 0 (
+echo.
+echo SUCCESS! DLL created at:
+echo target\release\database_labview_dll.dll
+echo.
+echo Copy this DLL to your LabVIEW project directory
+echo Use the functions from labview_interface.h in LabVIEW
+) else (
+echo.
+echo BUILD FAILED!
+)
+
+pause
+
+-----
+
+# labview_test.vi - LabVIEW usage example (text description)
+
+# In LabVIEW:
+
+# 1. Create a new VI
+
+# 2. Add “Call Library Function Node” from Functions > Connectivity > Libraries & Executables
+
+# 3. Configure each function:
+
+# Function: connect_to_server
+
+# - Library Name: database_labview_dll.dll
+
+# - Function Name: connect_to_server
+
+# - Parameters:
+
+# - host: String (input)
+
+# - port: 32-bit Integer (input)
+
+# - Return: 32-bit Integer
+
+# Function: write_value
+
+# - Library Name: database_labview_dll.dll
+
+# - Function Name: write_value
+
+# - Parameters:
+
+# - table_name: String (input)
+
+# - id_column: String (input)
+
+# - id_value: String (input)
+
+# - column_name: String (input)
+
+# - column_value: String (input)
+
+# - create_if_missing: 32-bit Integer (input)
+
+# - Return: 32-bit Integer
+
+# Function: read_value
+
+# - Library Name: database_labview_dll.dll
+
+# - Function Name: read_value
+
+# - Parameters:
+
+# - table_name: String (input)
+
+# - id_column: String (input)
+
+# - id_value: String (input)
+
+# - column_name: String (input)
+
+# - output_buffer: String (output, preallocate 1024 bytes)
+
+# - max_len: 32-bit Integer (input, set to 1024)
+
+# - Return: 32-bit Integer
+
+# Example LabVIEW workflow:
+
+# 1. Call connect_to_server(“localhost”, 50051)
+
+# 2. Check return value (0 = success)
+
+# 3. Call create_table(“users”, “id”)
+
+# 4. Call write_value(“users”, “id”, “1”, “name”, “John Doe”, 1)
+
+# 5. Call read_value(“users”, “id”, “1”, “name”, output_buffer, 1024)
+
+# 6. Display output_buffer
+
+# 7. Call disconnect()
+
+-----
+
+# README_LabVIEW.md - Instructions
+
+# LabVIEW gRPC Database DLL
+
+## Build Instructions
+
+1. Make sure your gRPC server is working
+1. Copy the proto file to this project
+1. Run: `cargo build --release`
+1. Copy `target/release/database_labview_dll.dll` to your LabVIEW project
+
+## LabVIEW Usage
+
+1. Add “Call Library Function Node” for each function
+1. Configure parameters as shown in labview_test.vi comments
+1. Connect to server first, then use read/write functions
+
+## Error Codes
+
+- 0: Success
+- -1: Not connected to server
+- -2: Invalid parameters
+- -3: gRPC error
+- -4: Memory error
+
+## Example Flow
+
+1. `connect_to_server("localhost", 50051)` → 0
+1. `create_table("test", "id")` → 0
+1. `write_value("test", "id", "1", "name", "John", 1)` → 0
+1. `read_value("test", "id", "1", "name", buffer, 1024)` → 0
+1. `disconnect()` → 0
+
+The DLL handles all the gRPC complexity - LabVIEW just calls simple functions!
