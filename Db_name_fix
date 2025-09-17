@@ -1,4 +1,4 @@
-# Fixed db_manager.rs - Column name access for SQLx 0.8.6
+// Fixed db_manager.rs - Column name access for SQLx 0.8.6
 
 use crate::database::{Value, ColumnSpec, WriteValueRequest};
 use crate::value_converter::ValueConverter;
