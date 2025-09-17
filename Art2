@@ -1,0 +1,731 @@
+# src/main.rs
+
+# Main entry point that declares modules and starts the server
+
+mod server;
+mod db_manager;
+mod value_converter;
+
+use anyhow::Result;
+use server::DatabaseServiceImpl;
+use tonic::transport::Server;
+use tracing::info;
+
+pub mod database {
+tonic::include_proto!(“database”);
+}
+
+use database::database_service_server::DatabaseServiceServer;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+tracing_subscriber::init();
+
+```
+let database_url = "sqlite:./database.db";
+let service = DatabaseServiceImpl::new(database_url).await?;
+
+let addr = "[::1]:50051".parse()?;
+info!("Starting gRPC server on {}", addr);
+
+Server::builder()
+    .add_service(DatabaseServiceServer::new(service))
+    .serve(addr)
+    .await?;
+
+Ok(())
+```
+
+}
+
+-----
+
+# src/lib.rs
+
+# Library root for exposing public APIs
+
+pub mod server;
+pub mod db_manager;
+pub mod value_converter;
+
+pub mod database {
+tonic::include_proto!(“database”);
+}
+
+pub use server::DatabaseServiceImpl;
+pub use db_manager::DatabaseManager;
+pub use value_converter::ValueConverter;
+
+-----
+
+# src/server.rs
+
+# gRPC service implementation (moved from main.rs)
+
+use crate::database::{
+database_service_server::DatabaseService,
+*,
+};
+use crate::db_manager::DatabaseManager;
+use anyhow::Result;
+use std::collections::HashMap;
+use tonic::{Request, Response, Status};
+use tracing::{info, warn, error};
+
+#[derive(Debug)]
+pub struct DatabaseServiceImpl {
+db_manager: DatabaseManager,
+}
+
+impl DatabaseServiceImpl {
+pub async fn new(database_url: &str) -> Result<Self> {
+let db_manager = DatabaseManager::new(database_url).await?;
+Ok(Self { db_manager })
+}
+}
+
+#[tonic::async_trait]
+impl DatabaseService for DatabaseServiceImpl {
+async fn write_value(
+&self,
+request: Request<WriteValueRequest>,
+) -> Result<Response<WriteValueResponse>, Status> {
+let req = request.into_inner();
+info!(
+“Writing value to table: {}, id_column: {}, column: {}”,
+req.table_name, req.id_column, req.column_name
+);
+
+```
+    match self.db_manager.write_value(
+        &req.table_name,
+        &req.id_column,
+        &req.id_value,
+        &req.column_name,
+        &req.column_value,
+        req.create_if_missing,
+    ).await {
+        Ok(rows_affected) => Ok(Response::new(WriteValueResponse {
+            success: true,
+            message: format!("Successfully updated {} row(s)", rows_affected),
+            rows_affected,
+        })),
+        Err(e) => {
+            error!("Failed to write value: {}", e);
+            Ok(Response::new(WriteValueResponse {
+                success: false,
+                message: format!("Failed to write value: {}", e),
+                rows_affected: 0,
+            }))
+        }
+    }
+}
+
+async fn write_row(
+    &self,
+    request: Request<WriteRowRequest>,
+) -> Result<Response<WriteRowResponse>, Status> {
+    let req = request.into_inner();
+    info!("Writing row to table: {}", req.table_name);
+
+    match self.db_manager.write_row(
+        &req.table_name,
+        &req.id_column,
+        &req.id_value,
+        req.column_values,
+        req.create_if_missing,
+        req.upsert,
+    ).await {
+        Ok((rows_affected, generated_id)) => Ok(Response::new(WriteRowResponse {
+            success: true,
+            message: format!("Successfully affected {} row(s)", rows_affected),
+            rows_affected,
+            generated_id,
+        })),
+        Err(e) => {
+            error!("Failed to write row: {}", e);
+            Ok(Response::new(WriteRowResponse {
+                success: false,
+                message: format!("Failed to write row: {}", e),
+                rows_affected: 0,
+                generated_id: None,
+            }))
+        }
+    }
+}
+
+async fn write_multiple_values(
+    &self,
+    request: Request<WriteMultipleValuesRequest>,
+) -> Result<Response<WriteMultipleValuesResponse>, Status> {
+    let req = request.into_inner();
+    info!("Writing multiple values, atomic: {}", req.atomic);
+
+    match self.db_manager.write_multiple_values(req.writes, req.atomic).await {
+        Ok((total_affected, results)) => Ok(Response::new(WriteMultipleValuesResponse {
+            success: true,
+            message: format!("Successfully affected {} total row(s)", total_affected),
+            total_rows_affected: total_affected,
+            individual_results: results,
+        })),
+        Err(e) => {
+            error!("Failed to write multiple values: {}", e);
+            Ok(Response::new(WriteMultipleValuesResponse {
+                success: false,
+                message: format!("Failed to write multiple values: {}", e),
+                total_rows_affected: 0,
+                individual_results: vec![],
+            }))
+        }
+    }
+}
+
+async fn read_value(
+    &self,
+    request: Request<ReadValueRequest>,
+) -> Result<Response<ReadValueResponse>, Status> {
+    let req = request.into_inner();
+    info!(
+        "Reading value from table: {}, id_column: {}, column: {}",
+        req.table_name, req.id_column, req.column_name
+    );
+
+    match self.db_manager.read_value(
+        &req.table_name,
+        &req.id_column,
+        &req.id_value,
+        &req.column_name,
+    ).await {
+        Ok(Some(value)) => Ok(Response::new(ReadValueResponse {
+            found: true,
+            value: Some(value),
+            message: "Value found".to_string(),
+        })),
+        Ok(None) => Ok(Response::new(ReadValueResponse {
+            found: false,
+            value: None,
+            message: "Value not found".to_string(),
+        })),
+        Err(e) => {
+            error!("Failed to read value: {}", e);
+            Ok(Response::new(ReadValueResponse {
+                found: false,
+                value: None,
+                message: format!("Failed to read value: {}", e),
+            }))
+        }
+    }
+}
+
+async fn read_row(
+    &self,
+    request: Request<ReadRowRequest>,
+) -> Result<Response<ReadRowResponse>, Status> {
+    let req = request.into_inner();
+    info!("Reading row from table: {}", req.table_name);
+
+    match self.db_manager.read_row(
+        &req.table_name,
+        &req.id_column,
+        &req.id_value,
+        req.columns,
+    ).await {
+        Ok(Some(row)) => Ok(Response::new(ReadRowResponse {
+            found: true,
+            column_values: row,
+            message: "Row found".to_string(),
+        })),
+        Ok(None) => Ok(Response::new(ReadRowResponse {
+            found: false,
+            column_values: HashMap::new(),
+            message: "Row not found".to_string(),
+        })),
+        Err(e) => {
+            error!("Failed to read row: {}", e);
+            Ok(Response::new(ReadRowResponse {
+                found: false,
+                column_values: HashMap::new(),
+                message: format!("Failed to read row: {}", e),
+            }))
+        }
+    }
+}
+
+async fn read_table(
+    &self,
+    request: Request<ReadTableRequest>,
+) -> Result<Response<ReadTableResponse>, Status> {
+    let req = request.into_inner();
+    info!("Reading table: {}", req.table_name);
+
+    match self.db_manager.read_table(
+        &req.table_name,
+        req.columns,
+        req.where_clause,
+        req.order_by,
+        req.limit,
+        req.offset,
+    ).await {
+        Ok((rows, total_count)) => Ok(Response::new(ReadTableResponse {
+            success: true,
+            rows,
+            total_count,
+            message: format!("Retrieved {} rows", rows.len()),
+        })),
+        Err(e) => {
+            error!("Failed to read table: {}", e);
+            Ok(Response::new(ReadTableResponse {
+                success: false,
+                rows: vec![],
+                total_count: 0,
+                message: format!("Failed to read table: {}", e),
+            }))
+        }
+    }
+}
+
+async fn read_query(
+    &self,
+    request: Request<ReadQueryRequest>,
+) -> Result<Response<ReadQueryResponse>, Status> {
+    let req = request.into_inner();
+    info!("Executing custom query");
+
+    match self.db_manager.read_query(&req.sql_query, req.parameters).await {
+        Ok((rows, columns)) => Ok(Response::new(ReadQueryResponse {
+            success: true,
+            rows,
+            column_names: columns,
+            message: format!("Query executed successfully, {} rows returned", rows.len()),
+        })),
+        Err(e) => {
+            error!("Failed to execute query: {}", e);
+            Ok(Response::new(ReadQueryResponse {
+                success: false,
+                rows: vec![],
+                column_names: vec![],
+                message: format!("Failed to execute query: {}", e),
+            }))
+        }
+    }
+}
+
+async fn create_table(
+    &self,
+    request: Request<CreateTableRequest>,
+) -> Result<Response<CreateTableResponse>, Status> {
+    let req = request.into_inner();
+    info!("Creating table: {}", req.table_name);
+
+    match self.db_manager.create_table(
+        &req.table_name,
+        req.columns,
+        req.if_not_exists,
+    ).await {
+        Ok(_) => Ok(Response::new(CreateTableResponse {
+            success: true,
+            message: format!("Table '{}' created successfully", req.table_name),
+        })),
+        Err(e) => {
+            error!("Failed to create table: {}", e);
+            Ok(Response::new(CreateTableResponse {
+                success: false,
+                message: format!("Failed to create table: {}", e),
+            }))
+        }
+    }
+}
+
+async fn drop_table(
+    &self,
+    request: Request<DropTableRequest>,
+) -> Result<Response<DropTableResponse>, Status> {
+    let req = request.into_inner();
+    info!("Dropping table: {}", req.table_name);
+
+    match self.db_manager.drop_table(&req.table_name, req.if_exists).await {
+        Ok(_) => Ok(Response::new(DropTableResponse {
+            success: true,
+            message: format!("Table '{}' dropped successfully", req.table_name),
+        })),
+        Err(e) => {
+            error!("Failed to drop table: {}", e);
+            Ok(Response::new(DropTableResponse {
+                success: false,
+                message: format!("Failed to drop table: {}", e),
+            }))
+        }
+    }
+}
+
+async fn list_tables(
+    &self,
+    _request: Request<ListTablesRequest>,
+) -> Result<Response<ListTablesResponse>, Status> {
+    info!("Listing tables");
+
+    match self.db_manager.list_tables().await {
+        Ok(tables) => Ok(Response::new(ListTablesResponse {
+            table_names: tables,
+            message: "Tables retrieved successfully".to_string(),
+        })),
+        Err(e) => {
+            error!("Failed to list tables: {}", e);
+            Ok(Response::new(ListTablesResponse {
+                table_names: vec![],
+                message: format!("Failed to list tables: {}", e),
+            }))
+        }
+    }
+}
+```
+
+}
+
+-----
+
+# src/db_manager.rs
+
+# Database manager implementation (updated for proper module structure)
+
+use crate::database::{Value, ColumnSpec, WriteValueRequest};
+use crate::value_converter::ValueConverter;
+use anyhow::{Result, anyhow};
+use sqlx::{SqlitePool, SqlitePoolOptions, Row};
+use std::collections::HashMap;
+use tracing::{info, warn};
+
+pub struct DatabaseManager {
+pool: SqlitePool,
+converter: ValueConverter,
+}
+
+impl DatabaseManager {
+pub async fn new(database_url: &str) -> Result<Self> {
+let pool = SqlitePoolOptions::new()
+.max_connections(10)
+.connect(database_url)
+.await?;
+
+```
+    Ok(Self {
+        pool,
+        converter: ValueConverter::new(),
+    })
+}
+
+pub async fn write_value(
+    &self,
+    table_name: &str,
+    id_column: &str,
+    id_value: &Option<Value>,
+    column_name: &str,
+    column_value: &Option<Value>,
+    create_if_missing: bool,
+) -> Result<i64> {
+    let id_value = id_value.as_ref().ok_or_else(|| anyhow!("ID value is required"))?;
+    let column_value = column_value.as_ref().ok_or_else(|| anyhow!("Column value is required"))?;
+
+    let id_sql_value = self.converter.value_to_sql(id_value)?;
+    let col_sql_value = self.converter.value_to_sql(column_value)?;
+
+    if create_if_missing {
+        // Use UPSERT (INSERT OR REPLACE)
+        let query = format!(
+            "INSERT OR REPLACE INTO {} ({}, {}) VALUES (?, ?)",
+            table_name, id_column, column_name
+        );
+        let result = sqlx::query(&query)
+            .bind(id_sql_value)
+            .bind(col_sql_value)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() as i64)
+    } else {
+        // Update existing row only
+        let query = format!(
+            "UPDATE {} SET {} = ? WHERE {} = ?",
+            table_name, column_name, id_column
+        );
+        let result = sqlx::query(&query)
+            .bind(col_sql_value)
+            .bind(id_sql_value)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() as i64)
+    }
+}
+
+pub async fn write_row(
+    &self,
+    table_name: &str,
+    id_column: &str,
+    id_value: &Option<Value>,
+    column_values: HashMap<String, Value>,
+    create_if_missing: bool,
+    upsert: bool,
+) -> Result<(i64, Option<Value>)> {
+    let id_value = id_value.as_ref().ok_or_else(|| anyhow!("ID value is required"))?;
+
+    if upsert || create_if_missing {
+        // Insert or replace
+        let mut columns = vec![id_column.to_string()];
+        let mut values = vec![self.converter.value_to_sql(id_value)?];
+        
+        for (col, val) in column_values {
+            columns.push(col);
+            values.push(self.converter.value_to_sql(&val)?);
+        }
+
+        let placeholders = vec!["?"; columns.len()].join(", ");
+        let columns_str = columns.join(", ");
+        
+        let query = format!(
+            "INSERT OR REPLACE INTO {} ({}) VALUES ({})",
+            table_name, columns_str, placeholders
+        );
+
+        let mut query_builder = sqlx::query(&query);
+        for value in values {
+            query_builder = query_builder.bind(value);
+        }
+
+        let result = query_builder.execute(&self.pool).await?;
+        Ok((result.rows_affected() as i64, None))
+    } else {
+        // Update existing row only
+        if column_values.is_empty() {
+            return Err(anyhow!("No column values provided for update"));
+        }
+
+        let set_clauses: Vec<String> = column_values.keys()
+            .map(|col| format!("{} = ?", col))
+            .collect();
+        let set_clause = set_clauses.join(", ");
+
+        let query = format!(
+            "UPDATE {} SET {} WHERE {} = ?",
+            table_name, set_clause, id_column
+        );
+
+        let mut query_builder = sqlx::query(&query);
+        for val in column_values.values() {
+            query_builder = query_builder.bind(self.converter.value_to_sql(val)?);
+        }
+        query_builder = query_builder.bind(self.converter.value_to_sql(id_value)?);
+
+        let result = query_builder.execute(&self.pool).await?;
+        Ok((result.rows_affected() as i64, None))
+    }
+}
+
+pub async fn write_multiple_values(
+    &self,
+    writes: Vec<WriteValueRequest>,
+    atomic: bool,
+) -> Result<(i64, Vec<String>)> {
+    if atomic {
+        // Use transaction
+        let mut tx = self.pool.begin().await?;
+        let mut total_affected = 0i64;
+        let mut results = Vec::new();
+
+        for write in writes {
+            match self.write_value_with_tx(
+                &mut tx,
+                &write.table_name,
+                &write.id_column,
+                &write.id_value,
+                &write.column_name,
+                &write.column_value,
+                write.create_if_missing,
+            ).await {
+                Ok(affected) => {
+                    total_affected += affected;
+                    results.push(format!("Success: {} rows affected", affected));
+                }
+                Err(e) => {
+                    tx.rollback().await?;
+                    return Err(e);
+                }
+            }
+        }
+
+        tx.commit().await?;
+        Ok((total_affected, results))
+    } else {
+        // Execute individually
+        let mut total_affected = 0i64;
+        let mut results = Vec::new();
+
+        for write in writes {
+            match self.write_value(
+                &write.table_name,
+                &write.id_column,
+                &write.id_value,
+                &write.column_name,
+                &write.column_value,
+                write.create_if_missing,
+            ).await {
+                Ok(affected) => {
+                    total_affected += affected;
+                    results.push(format!("Success: {} rows affected", affected));
+                }
+                Err(e) => {
+                    results.push(format!("Error: {}", e));
+                }
+            }
+        }
+
+        Ok((total_affected, results))
+    }
+}
+
+async fn write_value_with_tx(
+    &self,
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table_name: &str,
+    id_column: &str,
+    id_value: &Option<Value>,
+    column_name: &str,
+    column_value: &Option<Value>,
+    create_if_missing: bool,
+) -> Result<i64> {
+    let id_value = id_value.as_ref().ok_or_else(|| anyhow!("ID value is required"))?;
+    let column_value = column_value.as_ref().ok_or_else(|| anyhow!("Column value is required"))?;
+
+    let id_sql_value = self.converter.value_to_sql(id_value)?;
+    let col_sql_value = self.converter.value_to_sql(column_value)?;
+
+    if create_if_missing {
+        let query = format!(
+            "INSERT OR REPLACE INTO {} ({}, {}) VALUES (?, ?)",
+            table_name, id_column, column_name
+        );
+        let result = sqlx::query(&query)
+            .bind(id_sql_value)
+            .bind(col_sql_value)
+            .execute(&mut **tx)
+            .await?;
+        Ok(result.rows_affected() as i64)
+    } else {
+        let query = format!(
+            "UPDATE {} SET {} = ? WHERE {} = ?",
+            table_name, column_name, id_column
+        );
+        let result = sqlx::query(&query)
+            .bind(col_sql_value)
+            .bind(id_sql_value)
+            .execute(&mut **tx)
+            .await?;
+        Ok(result.rows_affected() as i64)
+    }
+}
+
+// ... rest of the implementation (read methods, table management, etc.)
+// Same as before but with proper module structure
+```
+
+}
+
+-----
+
+# src/value_converter.rs
+
+# Value converter implementation (no changes needed)
+
+use crate::database::Value;
+use anyhow::{Result, anyhow};
+use serde_json;
+
+pub struct ValueConverter;
+
+impl ValueConverter {
+pub fn new() -> Self {
+Self
+}
+
+```
+pub fn value_to_sql(&self, value: &Value) -> Result<serde_json::Value> {
+    match &value.value_type {
+        Some(value_type) => match value_type {
+            crate::database::value::ValueType::TextValue(s) => Ok(serde_json::Value::String(s.clone())),
+            crate::database::value::ValueType::IntValue(i) => Ok(serde_json::Value::Number(serde_json::Number::from(*i))),
+            crate::database::value::ValueType::FloatValue(f) => {
+                Ok(serde_json::Value::Number(
+                    serde_json::Number::from_f64(*f).ok_or_else(|| anyhow!("Invalid float value"))?
+                ))
+            },
+            crate::database::value::ValueType::BoolValue(b) => Ok(serde_json::Value::Bool(*b)),
+            crate::database::value::ValueType::BlobValue(bytes) => {
+                Ok(serde_json::Value::String(base64::encode(bytes)))
+            },
+        },
+        None => Ok(serde_json::Value::Null),
+    }
+}
+
+pub fn sql_to_value(&self, json_value: &serde_json::Value) -> Result<Value> {
+    let value_type = match json_value {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(s) => {
+            // Try to detect if this is base64 encoded binary data
+            if let Ok(bytes) = base64::decode(s) {
+                Some(crate::database::value::ValueType::BlobValue(bytes))
+            } else {
+                Some(crate::database::value::ValueType::TextValue(s.clone()))
+            }
+        },
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Some(crate::database::value::ValueType::IntValue(i))
+            } else if let Some(f) = n.as_f64() {
+                Some(crate::database::value::ValueType::FloatValue(f))
+            } else {
+                return Err(anyhow!("Invalid number format"));
+            }
+        },
+        serde_json::Value::Bool(b) => Some(crate::database::value::ValueType::BoolValue(*b)),
+        _ => return Err(anyhow!("Unsupported JSON value type")),
+    };
+
+    Ok(Value { value_type })
+}
+```
+
+}
+
+-----
+
+# Updated Cargo.toml
+
+# Add base64 dependency for blob handling
+
+[package]
+name = “grpc-sqlite-server”
+version = “0.1.0”
+edition = “2021”
+
+[[bin]]
+name = “server”
+path = “src/main.rs”
+
+[[example]]
+name = “client_basic”
+path = “examples/client_basic.rs”
+
+[dependencies]
+tokio = { version = “1.0”, features = [“macros”, “rt-multi-thread”] }
+tonic = “0.10”
+prost = “0.12”
+sqlx = { version = “0.7”, features = [“runtime-tokio-rustls”, “sqlite”, “chrono”] }
+serde = { version = “1.0”, features = [“derive”] }
+serde_json = “1.0”
+tracing = “0.1”
+tracing-subscriber = “0.3”
+anyhow = “1.0”
+thiserror = “1.0”
+base64 = “0.21”
+
+[build-dependencies]
+tonic-build = “0.10”
