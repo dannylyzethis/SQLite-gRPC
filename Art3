@@ -1,0 +1,385 @@
+# build.rs
+
+# Fixed build script for protobuf compilation
+
+use std::env;
+use std::path::PathBuf;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+let out_dir = PathBuf::from(env::var(“OUT_DIR”).unwrap());
+
+```
+tonic_build::configure()
+    .build_server(true)
+    .build_client(true)
+    .out_dir(&out_dir)
+    .compile(
+        &["proto/database.proto"],
+        &["proto"],
+    )?;
+
+// Tell Cargo to rerun this build script if the proto file changes
+println!("cargo:rerun-if-changed=proto/database.proto");
+
+Ok(())
+```
+
+}
+
+-----
+
+# proto/database.proto
+
+# Move proto file to proto/ directory
+
+syntax = “proto3”;
+
+package database;
+
+service DatabaseService {
+// Write operations
+rpc WriteValue(WriteValueRequest) returns (WriteValueResponse);
+rpc WriteRow(WriteRowRequest) returns (WriteRowResponse);
+rpc WriteMultipleValues(WriteMultipleValuesRequest) returns (WriteMultipleValuesResponse);
+
+```
+// Read operations  
+rpc ReadValue(ReadValueRequest) returns (ReadValueResponse);
+rpc ReadRow(ReadRowRequest) returns (ReadRowResponse);
+rpc ReadTable(ReadTableRequest) returns (ReadTableResponse);
+rpc ReadQuery(ReadQueryRequest) returns (ReadQueryResponse);
+
+// Table management
+rpc CreateTable(CreateTableRequest) returns (CreateTableResponse);
+rpc DropTable(DropTableRequest) returns (DropTableResponse);
+rpc ListTables(ListTablesRequest) returns (ListTablesResponse);
+```
+
+}
+
+// Data types
+message Value {
+oneof value_type {
+string text_value = 1;
+int64 int_value = 2;
+double float_value = 3;
+bool bool_value = 4;
+bytes blob_value = 5;
+}
+}
+
+message ColumnSpec {
+string name = 1;
+string data_type = 2; // TEXT, INTEGER, REAL, BLOB, BOOLEAN
+bool not_null = 3;
+bool primary_key = 4;
+bool unique = 5;
+string default_value = 6;
+}
+
+// Write operations
+message WriteValueRequest {
+string table_name = 1;
+string id_column = 2;
+Value id_value = 3;
+string column_name = 4;
+Value column_value = 5;
+bool create_if_missing = 6; // Create row if ID doesn’t exist
+}
+
+message WriteValueResponse {
+bool success = 1;
+string message = 2;
+int64 rows_affected = 3;
+}
+
+message WriteRowRequest {
+string table_name = 1;
+string id_column = 2;
+Value id_value = 3;
+map<string, Value> column_values = 4;
+bool create_if_missing = 5;
+bool upsert = 6; // Insert or update
+}
+
+message WriteRowResponse {
+bool success = 1;
+string message = 2;
+int64 rows_affected = 3;
+Value generated_id = 4; // If using auto-increment
+}
+
+message WriteMultipleValuesRequest {
+repeated WriteValueRequest writes = 1;
+bool atomic = 2; // All or nothing transaction
+}
+
+message WriteMultipleValuesResponse {
+bool success = 1;
+string message = 2;
+int64 total_rows_affected = 3;
+repeated string individual_results = 4;
+}
+
+// Read operations
+message ReadValueRequest {
+string table_name = 1;
+string id_column = 2;
+Value id_value = 3;
+string column_name = 4;
+}
+
+message ReadValueResponse {
+bool found = 1;
+Value value = 2;
+string message = 3;
+}
+
+message ReadRowRequest {
+string table_name = 1;
+string id_column = 2;
+Value id_value = 3;
+repeated string columns = 4; // Empty means all columns
+}
+
+message ReadRowResponse {
+bool found = 1;
+map<string, Value> column_values = 2;
+string message = 3;
+}
+
+message ReadTableRequest {
+string table_name = 1;
+repeated string columns = 2; // Empty means all columns
+string where_clause = 3; // Optional WHERE condition
+string order_by = 4; // Optional ORDER BY
+int32 limit = 5; // Optional LIMIT
+int32 offset = 6; // Optional OFFSET
+}
+
+message ReadTableResponse {
+bool success = 1;
+repeated map<string, Value> rows = 2;
+int64 total_count = 3;
+string message = 4;
+}
+
+message ReadQueryRequest {
+string sql_query = 1;
+repeated Value parameters = 2; // For prepared statements
+}
+
+message ReadQueryResponse {
+bool success = 1;
+repeated map<string, Value> rows = 2;
+repeated string column_names = 3;
+string message = 4;
+}
+
+// Table management
+message CreateTableRequest {
+string table_name = 1;
+repeated ColumnSpec columns = 2;
+bool if_not_exists = 3;
+}
+
+message CreateTableResponse {
+bool success = 1;
+string message = 2;
+}
+
+message DropTableRequest {
+string table_name = 1;
+bool if_exists = 2;
+}
+
+message DropTableResponse {
+bool success = 1;
+string message = 2;
+}
+
+message ListTablesRequest {
+}
+
+message ListTablesResponse {
+repeated string table_names = 1;
+string message = 2;
+}
+
+-----
+
+# src/main.rs
+
+# Updated main.rs with correct proto inclusion
+
+mod server;
+mod db_manager;
+mod value_converter;
+
+use anyhow::Result;
+use server::DatabaseServiceImpl;
+use tonic::transport::Server;
+use tracing::info;
+
+// Include the generated protobuf code
+pub mod database {
+tonic::include_proto!(“database”);
+}
+
+use database::database_service_server::DatabaseServiceServer;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+tracing_subscriber::init();
+
+```
+let database_url = "sqlite:./database.db";
+let service = DatabaseServiceImpl::new(database_url).await?;
+
+let addr = "[::1]:50051".parse()?;
+info!("Starting gRPC server on {}", addr);
+
+Server::builder()
+    .add_service(DatabaseServiceServer::new(service))
+    .serve(addr)
+    .await?;
+
+Ok(())
+```
+
+}
+
+-----
+
+# src/lib.rs
+
+# Updated lib.rs with correct proto inclusion
+
+pub mod server;
+pub mod db_manager;
+pub mod value_converter;
+
+// Include the generated protobuf code at the library level
+pub mod database {
+tonic::include_proto!(“database”);
+}
+
+pub use server::DatabaseServiceImpl;
+pub use db_manager::DatabaseManager;
+pub use value_converter::ValueConverter;
+
+-----
+
+# scripts/generate-proto.sh
+
+#!/bin/bash
+
+# Script to manually generate protobuf files (optional)
+
+echo “Generating protobuf files…”
+
+# Ensure proto directory exists
+
+mkdir -p proto
+
+# Generate the files using protoc (alternative approach)
+
+# This is optional - cargo build should handle it automatically
+
+protoc –proto_path=proto   
+–rust_out=src/generated   
+–tonic_out=src/generated   
+proto/database.proto
+
+echo “Protobuf generation complete!”
+
+-----
+
+# Cargo.toml
+
+# Updated with correct build configuration
+
+[package]
+name = “grpc-sqlite-server”
+version = “0.1.0”
+edition = “2021”
+
+[[bin]]
+name = “server”
+path = “src/main.rs”
+
+[[example]]
+name = “client_basic”
+path = “examples/client_basic.rs”
+
+[dependencies]
+tokio = { version = “1.0”, features = [“macros”, “rt-multi-thread”] }
+tonic = “0.10”
+prost = “0.12”
+sqlx = { version = “0.7”, features = [“runtime-tokio-rustls”, “sqlite”, “chrono”] }
+serde = { version = “1.0”, features = [“derive”] }
+serde_json = “1.0”
+tracing = “0.1”
+tracing-subscriber = “0.3”
+anyhow = “1.0”
+thiserror = “1.0”
+base64 = “0.21”
+
+[build-dependencies]
+tonic-build = “0.10”
+
+-----
+
+# .gitignore
+
+# Git ignore file
+
+/target
+Cargo.lock
+database.db
+*.db
+*.db-*
+
+# Generated files
+
+/src/generated/
+
+# IDE files
+
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+
+.DS_Store
+Thumbs.db
+
+-----
+
+# Project Setup Commands
+
+# 1. Create the correct directory structure
+
+mkdir -p grpc-sqlite-server/{proto,src,examples,tests,scripts,docs}
+cd grpc-sqlite-server
+
+# 2. Create all the files as shown above
+
+# 3. Build the project (this will run build.rs and generate protobuf files)
+
+cargo build
+
+# 4. If you get build errors, try cleaning and rebuilding:
+
+cargo clean
+cargo build
+
+# 5. Run the server
+
+cargo run –bin server
+
+# 6. In another terminal, run the client example
+
+cargo run –example client_basic
