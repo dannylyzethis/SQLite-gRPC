@@ -1,0 +1,335 @@
+# gRPC Database Client - COM Wrapper
+
+## Overview
+
+Extended C# gRPC client wrapper with COM visibility for database operations. This implementation adds comprehensive database functionality to the basic gRPC client.
+
+## Project Structure
+
+```
+GrpcWrapper/
+├── GrpcClient.cs          (Your original file - verification methods)
+├── GrpcClient_Extended.cs (Complete implementation with all DB methods)
+├── GrpcWrapper.csproj     (Your project file)
+└── Protos/
+    └── database.proto     (Your proto definition)
+```
+
+## Features
+
+### Database Write Operations
+
+- **WriteTextValue()** - Write string values to a cell
+- **WriteIntValue()** - Write integer values to a cell
+- **WriteFloatValue()** - Write floating-point values to a cell
+- **WriteBoolValue()** - Write boolean values to a cell
+
+### Database Read Operations
+
+- **ReadValue()** - Read single value by text ID
+- **ReadValueByIntId()** - Read single value by integer ID
+- **ReadRow()** - Read entire row by text ID
+- **ReadRowByIntId()** - Read entire row by integer ID
+- **ReadTable()** - Read multiple rows with filtering, ordering, and limits
+- **ExecuteQuery()** - Execute custom SQL queries
+
+### Table Management
+
+- **CreateTable()** - Create new tables with column specifications
+- **DropTable()** - Drop existing tables
+- **ListTables()** - List all tables in the database
+
+### Verification Methods (Testing)
+
+- **SayHello()** - Simple greeting test
+- **SayGoodbye()** - Farewell message test
+- **AddNumbers()** - Addition test
+- **GetStatus()** - Server status check
+- **Echo()** - Echo with optional uppercase
+- **TestConnection()** - Connection validation
+
+## Usage Examples
+
+### 1. Basic Connection
+
+```csharp
+var client = new GrpcClient();
+client.ServerAddress = "localhost";
+client.ServerPort = 50051;
+
+if (client.TestConnection())
+{
+    Console.WriteLine("Connected!");
+}
+else
+{
+    Console.WriteLine("Failed: " + client.LastError);
+}
+
+client.Dispose();
+```
+
+### 2. Create a Table
+
+```csharp
+var client = new GrpcClient();
+client.Initialize();
+
+// Column format: "name:type:flags,name:type:flags,..."
+// Flags: PRIMARY_KEY, NOT_NULL, UNIQUE
+string columnSpecs = "id:INTEGER:PRIMARY_KEY,name:TEXT:NOT_NULL,email:TEXT:UNIQUE,age:INTEGER:";
+
+string result = client.CreateTable("users", columnSpecs, true);
+Console.WriteLine(result);
+
+client.Dispose();
+```
+
+### 3. Write Data
+
+```csharp
+var client = new GrpcClient();
+client.Initialize();
+
+// Write text value (createIfMissing=true will insert new row)
+string result = client.WriteTextValue("users", "id", "1", "name", "John Doe", true);
+Console.WriteLine(result);
+
+// Write integer value to existing row
+result = client.WriteIntValue("users", "id", 1, "age", 30, false);
+Console.WriteLine(result);
+
+// Write float value
+result = client.WriteFloatValue("products", "id", 101, "price", 29.99, true);
+Console.WriteLine(result);
+
+client.Dispose();
+```
+
+### 4. Read Data
+
+```csharp
+var client = new GrpcClient();
+client.Initialize();
+
+// Read single value by integer ID
+string name = client.ReadValueByIntId("users", "id", 1, "name");
+Console.WriteLine("Name: " + name);
+
+// Read entire row
+string row = client.ReadRowByIntId("users", "id", 1);
+Console.WriteLine("Row:\n" + row);
+
+client.Dispose();
+```
+
+### 5. Query Data
+
+```csharp
+var client = new GrpcClient();
+client.Initialize();
+
+// Read table with filtering
+string result = client.ReadTable("users", "age > 25", "name ASC", 10);
+Console.WriteLine(result);
+
+// Execute custom SQL
+result = client.ExecuteQuery("SELECT name, age FROM users WHERE age >= 18 ORDER BY name");
+Console.WriteLine(result);
+
+client.Dispose();
+```
+
+### 6. Table Management
+
+```csharp
+var client = new GrpcClient();
+client.Initialize();
+
+// List all tables
+string tables = client.ListTables();
+Console.WriteLine(tables);
+
+// Drop a table
+string result = client.DropTable("temp_table", true);
+Console.WriteLine(result);
+
+client.Dispose();
+```
+
+## Method Reference
+
+### WriteTextValue
+
+```csharp
+string WriteTextValue(
+    string tableName,      // Table name
+    string idColumn,       // ID column name
+    string idValue,        // ID value to match
+    string columnName,     // Column to write to
+    string value,          // Value to write
+    bool createIfMissing   // Create row if ID doesn't exist
+)
+```
+
+### WriteIntValue
+
+```csharp
+string WriteIntValue(
+    string tableName,
+    string idColumn,
+    long idValue,          // Integer ID
+    string columnName,
+    long value,            // Integer value to write
+    bool createIfMissing
+)
+```
+
+### ReadValueByIntId
+
+```csharp
+string ReadValueByIntId(
+    string tableName,
+    string idColumn,
+    long idValue,
+    string columnName
+)
+```
+
+### ReadTable
+
+```csharp
+string ReadTable(
+    string tableName,
+    string whereClause,    // SQL WHERE condition (without "WHERE")
+    string orderBy,        // SQL ORDER BY (without "ORDER BY")
+    int limit              // Maximum rows to return (0 = no limit)
+)
+```
+
+### CreateTable
+
+```csharp
+string CreateTable(
+    string tableName,
+    string columnSpecs,    // "col1:TYPE:FLAGS,col2:TYPE:FLAGS,..."
+    bool ifNotExists       // Don't error if table exists
+)
+```
+
+**Column Spec Format:**
+
+- `name:INTEGER:PRIMARY_KEY`
+- `email:TEXT:NOT_NULL`
+- `status:TEXT:UNIQUE`
+- `age:INTEGER:` (no flags)
+
+**Available Flags:**
+
+- `PRIMARY_KEY` - Set as primary key
+- `NOT_NULL` - Cannot be null
+- `UNIQUE` - Values must be unique
+
+## Return Value Format
+
+### Success Response
+
+```
+SUCCESS: <message> (Rows: <count>)
+```
+
+### Error Response
+
+```
+ERROR: <error message>
+```
+
+### Not Found Response
+
+```
+NOT_FOUND: <message>
+```
+
+### Data Response
+
+For read operations, returns the actual data or formatted results.
+
+## Error Handling
+
+All methods return strings with status prefixes:
+
+- `SUCCESS:` - Operation completed successfully
+- `ERROR:` - Operation failed
+- `NOT_FOUND:` - Requested data not found
+
+Check the `LastError` property for detailed error information:
+
+```csharp
+string result = client.ReadValue("users", "id", "999", "name");
+if (result.StartsWith("ERROR:"))
+{
+    Console.WriteLine("Operation failed: " + client.LastError);
+}
+```
+
+## Building for COM
+
+Your .csproj already has COM settings configured:
+
+```xml
+<PropertyGroup>
+  <TargetFramework>net48</TargetFramework>
+  <ComVisible>true</ComVisible>
+  <PlatformTarget>x86</PlatformTarget>
+</PropertyGroup>
+```
+
+### Build Steps
+
+1. Build the project in Release mode
+1. Register the assembly for COM Interop:
+   
+   ```
+   regasm /codebase GrpcWrapper.dll /tlb:GrpcWrapper.tlb
+   ```
+1. The assembly can now be referenced from COM clients
+
+## Dependencies
+
+As defined in your .csproj:
+
+- Grpc.Core (2.46.6)
+- Google.Protobuf (3.21.12)
+- Grpc.Tools (2.50.0)
+
+## Notes
+
+1. **Connection Management**: The client automatically initializes on first use if not explicitly initialized.
+1. **Resource Cleanup**: Always call `Dispose()` when done to properly close the gRPC channel.
+1. **Thread Safety**: This wrapper is not thread-safe. Create separate instances for concurrent operations.
+1. **Data Types**: The Value oneof in proto supports:
+- TEXT (string)
+- INTEGER (int64)
+- REAL (double)
+- BOOLEAN (bool)
+- BLOB (bytes)
+1. **COM Compatibility**: All methods return strings for maximum COM compatibility.
+1. **ID Types**: Methods ending with `ByIntId` use integer IDs, others use string IDs.
+
+## Limitations
+
+- Binary/BLOB data handling is limited through COM (returns size info only)
+- WriteRow and WriteMultipleValues from proto are not yet implemented (can be added if needed)
+- Complex query results are formatted as strings rather than structured data
+- No streaming support (all operations are unary)
+
+## Future Enhancements
+
+If needed, can add:
+
+- WriteRow method for multi-column writes
+- Batch write operations (WriteMultipleValues)
+- Better result parsing/structured returns
+- Connection pooling
+- Async operation support
+- Transaction management
