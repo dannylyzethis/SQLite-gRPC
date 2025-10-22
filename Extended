@@ -1,0 +1,701 @@
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+using Grpc.Core;
+using Services;
+
+namespace GrpcWrapper
+{
+    [ComVisible(true)]
+    [ClassInterface(ClassInterfaceType.AutoDual)]
+    public class GrpcClient
+    {
+        private Channel _channel;
+        private DatabaseService.DatabaseServiceClient _client;
+        private string _serverAddress = "localhost";
+        private int _serverPort = 50051;
+
+        public string ServerAddress
+        {
+            get { return _serverAddress; }
+            set { _serverAddress = value; }
+        }
+
+        public int ServerPort
+        {
+            get { return _serverPort; }
+            set { _serverPort = value; }
+        }
+
+        public string LastError { get; private set; } = "";
+
+        public bool Initialize()
+        {
+            try
+            {
+                _channel = new Channel(_serverAddress, _serverPort, ChannelCredentials.Insecure);
+                _client = new DatabaseService.DatabaseServiceClient(_channel);
+                LastError = "";
+                return true;
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return false;
+            }
+        }
+
+        // Verification methods (existing)
+        public string SayHello(string name)
+        {
+            try
+            {
+                if (_client == null && !Initialize())
+                    return "ERROR: Failed to connect - " + LastError;
+
+                var request = new HelloRequest { Name = name };
+                var response = _client.SayHello(request);
+                return response.Message;
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return "ERROR: " + ex.Message;
+            }
+        }
+
+        public string SayGoodbye(string name)
+        {
+            try
+            {
+                if (_client == null && !Initialize())
+                    return "ERROR: Failed to connect - " + LastError;
+
+                var request = new HelloRequest { Name = name };
+                var response = _client.SayGoodbye(request);
+                return response.Message;
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return "ERROR: " + ex.Message;
+            }
+        }
+
+        public string AddNumbers(int a, int b)
+        {
+            try
+            {
+                if (_client == null && !Initialize())
+                    return "ERROR: Failed to connect - " + LastError;
+
+                var request = new AddRequest { A = a, B = b };
+                var response = _client.AddNumbers(request);
+                return response.Message + " (Result: " + response.Result + ")";
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return "ERROR: " + ex.Message;
+            }
+        }
+
+        public string GetStatus()
+        {
+            try
+            {
+                if (_client == null && !Initialize())
+                    return "ERROR: Failed to connect - " + LastError;
+
+                var request = new StatusRequest();
+                var response = _client.GetStatus(request);
+                return "Status: " + response.Status + 
+                       ", Uptime: " + response.Uptime + 
+                       ", Requests: " + response.RequestCount;
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return "ERROR: " + ex.Message;
+            }
+        }
+
+        public string Echo(string text, bool uppercase)
+        {
+            try
+            {
+                if (_client == null && !Initialize())
+                    return "ERROR: Failed to connect - " + LastError;
+
+                var request = new EchoRequest { Text = text, Uppercase = uppercase };
+                var response = _client.Echo(request);
+                return response.EchoedText;
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return "ERROR: " + ex.Message;
+            }
+        }
+
+        // Database Operations - Write Methods
+        
+        /// <summary>
+        /// Write a text value to a specific cell in the database
+        /// </summary>
+        public string WriteTextValue(string tableName, string idColumn, string idValue, string columnName, string value, bool createIfMissing)
+        {
+            try
+            {
+                if (_client == null && !Initialize())
+                    return "ERROR: Failed to connect - " + LastError;
+
+                var request = new WriteValueRequest
+                {
+                    TableName = tableName,
+                    IdColumn = idColumn,
+                    IdValue = new Value { TextValue = idValue },
+                    ColumnName = columnName,
+                    ColumnValue = new Value { TextValue = value },
+                    CreateIfMissing = createIfMissing
+                };
+
+                var response = _client.WriteValue(request);
+                if (response.Success)
+                    return "SUCCESS: " + response.Message + " (Rows: " + response.RowsAffected + ")";
+                else
+                    return "ERROR: " + response.Message;
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return "ERROR: " + ex.Message;
+            }
+        }
+
+        /// <summary>
+        /// Write an integer value to a specific cell in the database
+        /// </summary>
+        public string WriteIntValue(string tableName, string idColumn, long idValue, string columnName, long value, bool createIfMissing)
+        {
+            try
+            {
+                if (_client == null && !Initialize())
+                    return "ERROR: Failed to connect - " + LastError;
+
+                var request = new WriteValueRequest
+                {
+                    TableName = tableName,
+                    IdColumn = idColumn,
+                    IdValue = new Value { IntValue = idValue },
+                    ColumnName = columnName,
+                    ColumnValue = new Value { IntValue = value },
+                    CreateIfMissing = createIfMissing
+                };
+
+                var response = _client.WriteValue(request);
+                if (response.Success)
+                    return "SUCCESS: " + response.Message + " (Rows: " + response.RowsAffected + ")";
+                else
+                    return "ERROR: " + response.Message;
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return "ERROR: " + ex.Message;
+            }
+        }
+
+        /// <summary>
+        /// Write a float/double value to a specific cell in the database
+        /// </summary>
+        public string WriteFloatValue(string tableName, string idColumn, long idValue, string columnName, double value, bool createIfMissing)
+        {
+            try
+            {
+                if (_client == null && !Initialize())
+                    return "ERROR: Failed to connect - " + LastError;
+
+                var request = new WriteValueRequest
+                {
+                    TableName = tableName,
+                    IdColumn = idColumn,
+                    IdValue = new Value { IntValue = idValue },
+                    ColumnName = columnName,
+                    ColumnValue = new Value { FloatValue = value },
+                    CreateIfMissing = createIfMissing
+                };
+
+                var response = _client.WriteValue(request);
+                if (response.Success)
+                    return "SUCCESS: " + response.Message + " (Rows: " + response.RowsAffected + ")";
+                else
+                    return "ERROR: " + response.Message;
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return "ERROR: " + ex.Message;
+            }
+        }
+
+        /// <summary>
+        /// Write a boolean value to a specific cell in the database
+        /// </summary>
+        public string WriteBoolValue(string tableName, string idColumn, long idValue, string columnName, bool value, bool createIfMissing)
+        {
+            try
+            {
+                if (_client == null && !Initialize())
+                    return "ERROR: Failed to connect - " + LastError;
+
+                var request = new WriteValueRequest
+                {
+                    TableName = tableName,
+                    IdColumn = idColumn,
+                    IdValue = new Value { IntValue = idValue },
+                    ColumnName = columnName,
+                    ColumnValue = new Value { BoolValue = value },
+                    CreateIfMissing = createIfMissing
+                };
+
+                var response = _client.WriteValue(request);
+                if (response.Success)
+                    return "SUCCESS: " + response.Message + " (Rows: " + response.RowsAffected + ")";
+                else
+                    return "ERROR: " + response.Message;
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return "ERROR: " + ex.Message;
+            }
+        }
+
+        // Database Operations - Read Methods
+        
+        /// <summary>
+        /// Read a value from the database and return it as a string
+        /// </summary>
+        public string ReadValue(string tableName, string idColumn, string idValue, string columnName)
+        {
+            try
+            {
+                if (_client == null && !Initialize())
+                    return "ERROR: Failed to connect - " + LastError;
+
+                var request = new ReadValueRequest
+                {
+                    TableName = tableName,
+                    IdColumn = idColumn,
+                    IdValue = new Value { TextValue = idValue },
+                    ColumnName = columnName
+                };
+
+                var response = _client.ReadValue(request);
+                if (response.Found)
+                {
+                    return ValueToString(response.Value);
+                }
+                else
+                {
+                    return "NOT_FOUND: " + response.Message;
+                }
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return "ERROR: " + ex.Message;
+            }
+        }
+
+        /// <summary>
+        /// Read a value using integer ID
+        /// </summary>
+        public string ReadValueByIntId(string tableName, string idColumn, long idValue, string columnName)
+        {
+            try
+            {
+                if (_client == null && !Initialize())
+                    return "ERROR: Failed to connect - " + LastError;
+
+                var request = new ReadValueRequest
+                {
+                    TableName = tableName,
+                    IdColumn = idColumn,
+                    IdValue = new Value { IntValue = idValue },
+                    ColumnName = columnName
+                };
+
+                var response = _client.ReadValue(request);
+                if (response.Found)
+                {
+                    return ValueToString(response.Value);
+                }
+                else
+                {
+                    return "NOT_FOUND: " + response.Message;
+                }
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return "ERROR: " + ex.Message;
+            }
+        }
+
+        /// <summary>
+        /// Read an entire row from the database
+        /// Returns a formatted string with all column values
+        /// </summary>
+        public string ReadRow(string tableName, string idColumn, string idValue)
+        {
+            try
+            {
+                if (_client == null && !Initialize())
+                    return "ERROR: Failed to connect - " + LastError;
+
+                var request = new ReadRowRequest
+                {
+                    TableName = tableName,
+                    IdColumn = idColumn,
+                    IdValue = new Value { TextValue = idValue }
+                };
+
+                var response = _client.ReadRow(request);
+                if (response.Found)
+                {
+                    var sb = new StringBuilder();
+                    foreach (var kvp in response.ColumnValues)
+                    {
+                        sb.AppendLine(kvp.Key + ": " + ValueToString(kvp.Value));
+                    }
+                    return sb.ToString();
+                }
+                else
+                {
+                    return "NOT_FOUND: " + response.Message;
+                }
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return "ERROR: " + ex.Message;
+            }
+        }
+
+        /// <summary>
+        /// Read an entire row using integer ID
+        /// </summary>
+        public string ReadRowByIntId(string tableName, string idColumn, long idValue)
+        {
+            try
+            {
+                if (_client == null && !Initialize())
+                    return "ERROR: Failed to connect - " + LastError;
+
+                var request = new ReadRowRequest
+                {
+                    TableName = tableName,
+                    IdColumn = idColumn,
+                    IdValue = new Value { IntValue = idValue }
+                };
+
+                var response = _client.ReadRow(request);
+                if (response.Found)
+                {
+                    var sb = new StringBuilder();
+                    foreach (var kvp in response.ColumnValues)
+                    {
+                        sb.AppendLine(kvp.Key + ": " + ValueToString(kvp.Value));
+                    }
+                    return sb.ToString();
+                }
+                else
+                {
+                    return "NOT_FOUND: " + response.Message;
+                }
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return "ERROR: " + ex.Message;
+            }
+        }
+
+        /// <summary>
+        /// Read multiple rows from a table with optional filtering
+        /// Returns a formatted string with all rows
+        /// </summary>
+        public string ReadTable(string tableName, string whereClause, string orderBy, int limit)
+        {
+            try
+            {
+                if (_client == null && !Initialize())
+                    return "ERROR: Failed to connect - " + LastError;
+
+                var request = new ReadTableRequest
+                {
+                    TableName = tableName,
+                    WhereClause = whereClause ?? "",
+                    OrderBy = orderBy ?? "",
+                    Limit = limit
+                };
+
+                var response = _client.ReadTable(request);
+                if (response.Success)
+                {
+                    var sb = new StringBuilder();
+                    sb.AppendLine("Total rows: " + response.TotalCount);
+                    sb.AppendLine();
+                    
+                    int rowNum = 1;
+                    foreach (var row in response.Rows)
+                    {
+                        sb.AppendLine("Row " + rowNum + ":");
+                        foreach (var kvp in row.ColumnValues)
+                        {
+                            sb.AppendLine("  " + kvp.Key + ": " + ValueToString(kvp.Value));
+                        }
+                        sb.AppendLine();
+                        rowNum++;
+                    }
+                    return sb.ToString();
+                }
+                else
+                {
+                    return "ERROR: " + response.Message;
+                }
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return "ERROR: " + ex.Message;
+            }
+        }
+
+        /// <summary>
+        /// Execute a custom SQL query
+        /// Returns formatted results
+        /// </summary>
+        public string ExecuteQuery(string sqlQuery)
+        {
+            try
+            {
+                if (_client == null && !Initialize())
+                    return "ERROR: Failed to connect - " + LastError;
+
+                var request = new ReadQueryRequest
+                {
+                    SqlQuery = sqlQuery
+                };
+
+                var response = _client.ReadQuery(request);
+                if (response.Success)
+                {
+                    var sb = new StringBuilder();
+                    sb.AppendLine("Columns: " + string.Join(", ", response.ColumnNames));
+                    sb.AppendLine("Rows: " + response.Rows.Count);
+                    sb.AppendLine();
+                    
+                    int rowNum = 1;
+                    foreach (var row in response.Rows)
+                    {
+                        sb.AppendLine("Row " + rowNum + ":");
+                        foreach (var kvp in row.ColumnValues)
+                        {
+                            sb.AppendLine("  " + kvp.Key + ": " + ValueToString(kvp.Value));
+                        }
+                        sb.AppendLine();
+                        rowNum++;
+                    }
+                    return sb.ToString();
+                }
+                else
+                {
+                    return "ERROR: " + response.Message;
+                }
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return "ERROR: " + ex.Message;
+            }
+        }
+
+        // Table Management Methods
+        
+        /// <summary>
+        /// Create a new table in the database
+        /// columnSpecs format: "name:type:flags,name:type:flags,..."
+        /// Example: "id:INTEGER:PRIMARY_KEY,name:TEXT:NOT_NULL,age:INTEGER:"
+        /// </summary>
+        public string CreateTable(string tableName, string columnSpecs, bool ifNotExists)
+        {
+            try
+            {
+                if (_client == null && !Initialize())
+                    return "ERROR: Failed to connect - " + LastError;
+
+                var request = new CreateTableRequest
+                {
+                    TableName = tableName,
+                    IfNotExists = ifNotExists
+                };
+
+                // Parse column specifications
+                var specs = columnSpecs.Split(',');
+                foreach (var spec in specs)
+                {
+                    var parts = spec.Split(':');
+                    if (parts.Length >= 2)
+                    {
+                        var colSpec = new ColumnSpec
+                        {
+                            Name = parts[0].Trim(),
+                            DataType = parts[1].Trim()
+                        };
+
+                        if (parts.Length > 2)
+                        {
+                            var flags = parts[2].ToUpper();
+                            colSpec.NotNull = flags.Contains("NOT_NULL");
+                            colSpec.PrimaryKey = flags.Contains("PRIMARY_KEY");
+                            colSpec.Unique = flags.Contains("UNIQUE");
+                        }
+
+                        request.Columns.Add(colSpec);
+                    }
+                }
+
+                var response = _client.CreateTable(request);
+                if (response.Success)
+                    return "SUCCESS: " + response.Message;
+                else
+                    return "ERROR: " + response.Message;
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return "ERROR: " + ex.Message;
+            }
+        }
+
+        /// <summary>
+        /// Drop (delete) a table from the database
+        /// </summary>
+        public string DropTable(string tableName, bool ifExists)
+        {
+            try
+            {
+                if (_client == null && !Initialize())
+                    return "ERROR: Failed to connect - " + LastError;
+
+                var request = new DropTableRequest
+                {
+                    TableName = tableName,
+                    IfExists = ifExists
+                };
+
+                var response = _client.DropTable(request);
+                if (response.Success)
+                    return "SUCCESS: " + response.Message;
+                else
+                    return "ERROR: " + response.Message;
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return "ERROR: " + ex.Message;
+            }
+        }
+
+        /// <summary>
+        /// List all tables in the database
+        /// </summary>
+        public string ListTables()
+        {
+            try
+            {
+                if (_client == null && !Initialize())
+                    return "ERROR: Failed to connect - " + LastError;
+
+                var request = new ListTablesRequest();
+                var response = _client.ListTables(request);
+                
+                if (response.TableNames.Count == 0)
+                    return "No tables found";
+
+                var sb = new StringBuilder();
+                sb.AppendLine("Tables (" + response.TableNames.Count + "):");
+                foreach (var tableName in response.TableNames)
+                {
+                    sb.AppendLine("  - " + tableName);
+                }
+                return sb.ToString();
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return "ERROR: " + ex.Message;
+            }
+        }
+
+        // Helper Methods
+        
+        private string ValueToString(Value value)
+        {
+            if (value == null)
+                return "NULL";
+
+            switch (value.ValueTypeCase)
+            {
+                case Value.ValueTypeOneofCase.TextValue:
+                    return value.TextValue;
+                case Value.ValueTypeOneofCase.IntValue:
+                    return value.IntValue.ToString();
+                case Value.ValueTypeOneofCase.FloatValue:
+                    return value.FloatValue.ToString();
+                case Value.ValueTypeOneofCase.BoolValue:
+                    return value.BoolValue.ToString();
+                case Value.ValueTypeOneofCase.BlobValue:
+                    return "<BLOB:" + value.BlobValue.Length + " bytes>";
+                default:
+                    return "NULL";
+            }
+        }
+
+        public bool TestConnection()
+        {
+            try
+            {
+                var result = SayHello("ConnectionTest");
+                return !result.StartsWith("ERROR:");
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                if (_channel != null)
+                {
+                    _channel.ShutdownAsync().Wait(5000);
+                    _channel = null;
+                    _client = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+            }
+        }
+    }
+}
+```
